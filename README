@@ -1,0 +1,14 @@
+README.md explaining how to run your code
+Docstrings for all functions and classes
+Comments explaining non-obvious logic
+
+
+requirements.txt with pinned versions
+Clear instructions for data setup*
+learning rate schedular
+
+
+As we are doing a lot of hyperparameter search, we won't use the whole dataset for every experiment. Document this by creating a subset of the used data on HuggingFace datasets or Google Drive.
+
+
+HuggingFace: CarloColumbo/cilp_assessment
