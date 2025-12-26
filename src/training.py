@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Any, List, Callable
@@ -6,9 +7,6 @@ import wandb
 import time
 
 from src.models import BaseModel
-
-PROJECT_NAME = "cilp-extended-assessment"
-
 
 
 def train_model(
@@ -19,9 +17,10 @@ def train_model(
         epochs: int,
         train_dataloader: torch.utils.data.DataLoader,
         valid_dataloader: torch.utils.data.DataLoader,
-        run: Optional[wandb.Run] = None,
+        run: Optional[wandb.Run],
+        save_path: Optional[str],
         target_idx: int = -1,
-        save_path: Optional[str] = None,
+        log_predictions: bool = True,
     ) -> Tuple[List[float], List[float], float]:
     """
     Train loop for a given model with logging to wandb.
@@ -34,17 +33,15 @@ def train_model(
         epochs (int): The number of training epochs.
         train_dataloader (torch.utils.data.DataLoader): The training data loader.
         valid_dataloader (torch.utils.data.DataLoader): The validation data loader.
-        run (Optional[wandb.Run]): The wandb run object.
+        run (wandb.Run): The wandb run object.
+        save_path (str): The path to save the best model.
         target_idx (int): The index of the target variable in the batch.
-        save_path (Optional[str]): The path to save the best model. If None, the model is not saved.
+        log_predictions (bool): Whether to log sample predictions to wandb.
+        
         
     Returns:
         Tuple[List[float], List[float], float]: Training losses, validation losses, total training time with logging.
-    """
-    # Initialize wandb run if not provided
-    if not run:
-        run = wandb.init(project=PROJECT_NAME, name=f"{model.__class__.__name__}_training")
-    
+    """    
     # Log model and training configuration using BaseModel methods
     run.config.update({
         "batch_size": train_dataloader.batch_size,
@@ -86,15 +83,18 @@ def train_model(
         
         model.eval()
         batch_losses = []
-        val_outputs = []
         # Validation loop without updating weights
         for i, batch in enumerate(valid_dataloader):
             target = batch[target_idx]
             outputs = model(*input_fn(batch))
             batch_losses.append(loss_func(outputs, target).item())
-            if i == 0:
-                # save outputs for logging
-                val_outputs = outputs.detach().cpu().numpy()
+            # Log sample predictions for the first batch
+            if i == 0 and log_predictions:
+                # We assume binary classification             
+                probs = torch.sigmoid(outputs).squeeze()
+                # Get predicted class (0 or 1)
+                preds = (probs >= 0.5).long()
+                run.log({"val_sample_prediction": preds.cpu().numpy()})
 
         valid_loss = np.mean(batch_losses)
         valid_losses.append(valid_loss)
@@ -103,22 +103,17 @@ def train_model(
         elapsed = time.time() - start_time
         total_time += elapsed
 
-        # Save best model if save_path is provided
+        # Save best model
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
-            if save_path:
-                torch.save(model.state_dict(), save_path)
+            torch.save(model.state_dict(), save_path)
 
         # Log metrics of current epoch to wandb
-        # We include the model outputs for all validation samples
         run.log({
             "epoch": epoch + 1,
             "train_loss": train_loss,
             "valid_loss": valid_loss,
             "learning_rate": optimizer.param_groups[0]['lr'],
-            "val_outputs": val_outputs,
         })
-        
-    run.finish()
 
     return train_losses, valid_losses, total_time

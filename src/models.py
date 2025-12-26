@@ -380,6 +380,55 @@ class Embedder(BaseModel):
     
     def get_fusion_strategy(self) -> str:
         return "N/A"
+    
+    
+class EmbedderStrided(BaseModel):
+    """
+    EmbedderStrided is a model that produces normalized embeddings from input images.
+    It is a variant of Embedder that uses strided convolutions instead of max pooling.
+
+    Args:
+        in_ch (int): Number of input channels
+        emb_size (int): Size of the output embedding
+        
+    Returns:
+        Normalized embeddings of size emb_size
+    """
+    def __init__(self, in_ch, emb_size):
+        super().__init__()
+        self.embedding_size = emb_size
+        kernel_size = 3
+
+        # Convolution
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, 50, kernel_size, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(50, 100, kernel_size, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(100, 200, kernel_size, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(200, 200, kernel_size, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Flatten()
+        )
+
+        # Embeddings
+        self.dense_emb = nn.Sequential(
+            nn.Linear(200 * 4 * 4, 100),
+            nn.ReLU(),
+            nn.Linear(100, emb_size)
+        )
+
+    def forward(self, x):
+        conv = self.conv(x)
+        emb = self.dense_emb(conv)
+        return Fun.normalize(emb)
+    
+    def get_embedding_size(self) -> int:
+        return self.embedding_size
+    
+    def get_fusion_strategy(self) -> str:
+        return "N/A"
 
 
 class ContrastivePretraining(BaseModel):
@@ -419,10 +468,10 @@ class ContrastivePretraining(BaseModel):
         return logits_per_img, logits_per_lidar
     
     def get_embedding_size(self) -> int:
-        return -1  # TODO Not applicable for this model
-    
+        return self.img_embedder.get_embedding_size()
+
     def get_fusion_strategy(self) -> str:
-        return "N/A" # TODO
+        return "contrastive"
     
     
 class Projector(BaseModel):
@@ -480,7 +529,7 @@ class RGB2LiDARClassifier(BaseModel):
         self.projector = projector
         self.img_embedder = img_embedder
         self.classifier = nn.Sequential(
-            nn.Linear(200 * 4 * 4, 100),
+            nn.Linear(200, 100),
             nn.ReLU(),
             nn.Linear(100, num_classes)
         )
