@@ -40,75 +40,72 @@ class BaseModel(nn.Module, ABC):
 
 
 # Task 2
-class Net(BaseModel):
+class ConvEncoder(nn.Module):
     """
-    Net is a simple model that performs classification on input images.
-
-    Args:
-        in_ch (int): Number of input channels
-        num_classes (int): Number of output classes
-
-    Returns:
-        Output logits for each class
+    Conv encoder that outputs a 100-dim embedding
     """
-    def __init__(self, in_ch, num_classes=1):
-        kernel_size = 3
+    def __init__(self, in_ch, embedding_dim=100):
         super().__init__()
-        self.num_classes = num_classes
-        flattened_size = 200 * 8 * 8
-        self.conv1 = nn.Conv2d(in_ch, 50, kernel_size, padding=1)
-        self.conv2 = nn.Conv2d(50, 100, kernel_size, padding=1)
-        self.conv3 = nn.Conv2d(100, 200, kernel_size, padding=1)
-        self.pool = nn.MaxPool2d(2)
-        self.fc1 = nn.Linear(flattened_size, 1000)
-        self.fc2 = nn.Linear(1000, 100)
-        self.fc3 = nn.Linear(100, num_classes)
+        kernel_size = 3
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, 50, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(50, 100, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(100, 200, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            nn.Flatten(),
+        )
+
+        # Embeddings
+        self.dense_emb = nn.Sequential(
+            nn.Linear(200 * 8 * 8, 100),
+            nn.ReLU(),
+            nn.Linear(100, embedding_dim)
+        )
 
     def forward(self, x):
-        x = self.pool(Fun.relu(self.conv1(x)))
-        x = self.pool(Fun.relu(self.conv2(x)))
-        x = self.pool(Fun.relu(self.conv3(x)))
-        x = torch.flatten(x, 1) # flatten all dimensions except batch
-        x = Fun.relu(self.fc1(x))
-        x = Fun.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-    
-    def get_embedding_size(self) -> int:
-        return self.num_classes
-    
-    def get_fusion_strategy(self) -> str:
-        return "N/A"
+        conv = self.conv(x)
+        emb = self.dense_emb(conv)
+        return Fun.normalize(emb)
 
 
 class LateFusionModel(BaseModel):
     """
     LateFusionModel is a model that performs late fusion by combining the outputs
-    of two separate networks for RGB and XYZ inputs.
+    of two separate encoders for RGB and XYZ inputs.
 
     Args:
-        rgb_net (BaseModel): The network for RGB inputs
-        xyz_net (BaseModel): The network for XYZ inputs
         num_classes (int): Number of output classes
         
     Returns:
         Output logits for each class
     """
-    def __init__(self, rgb_net, xyz_net, num_classes=1):
+    def __init__(self, rgb_in_ch, lidar_in_ch, num_classes=1):
         super().__init__()
         self.num_classes = num_classes
-        self.rgb_net = rgb_net
-        self.xyz_net = xyz_net
-        self.fc1 = nn.Linear(num_classes * 2, num_classes * 10)
-        self.fc2 = nn.Linear(num_classes * 10, num_classes)
+        
+        self.rgb_encoder = ConvEncoder(rgb_in_ch, embedding_dim=100)
+        self.lidar_encoder = ConvEncoder(lidar_in_ch, embedding_dim=100)
 
-    def forward(self, x_img, x_xyz):
-        x_rgb = self.rgb_net(x_img)
-        x_xyz = self.xyz_net(x_xyz)
-        x = torch.cat((x_rgb, x_xyz), 1)
-        x = Fun.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
+        self.classifier = nn.Sequential(
+            nn.Linear(200, 100),
+            nn.ReLU(inplace=True),
+            nn.Linear(100, num_classes)
+        )
+
+    def forward(self, rgb, lidar):
+        rgb_emb = self.rgb_encoder(rgb)
+        lidar_emb = self.lidar_encoder(lidar)
+        fused = torch.cat([rgb_emb, lidar_emb], dim=1)
+        logits = self.classifier(fused)
+        return logits
     
     def get_embedding_size(self) -> int:
         return self.num_classes
@@ -134,34 +131,54 @@ class ConcatIntermediateNet(BaseModel):
         kernel_size = 3
         super().__init__()
         self.num_classes = num_classes
-        self.rgb_conv1 = nn.Conv2d(rgb_ch, 25, kernel_size, padding=1)
-        self.rgb_conv2 = nn.Conv2d(25, 50, kernel_size, padding=1)
-        self.rgb_conv3 = nn.Conv2d(50, 100, kernel_size, padding=1)
+
+        self.rgb_path = nn.Sequential(
+            nn.Conv2d(rgb_ch, 50, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(50, 100, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
         
-        self.xyz_conv1 = nn.Conv2d(xyz_ch, 25, kernel_size, padding=1)
-        self.xyz_conv2 = nn.Conv2d(25, 50, kernel_size, padding=1)
-        self.xyz_conv3 = nn.Conv2d(50, 100, kernel_size, padding=1)
+        self.lidar_path = nn.Sequential(
+            nn.Conv2d(xyz_ch, 50, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(50, 100, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
         
-        self.pool = nn.MaxPool2d(2)
-        self.fc1 = nn.Linear(200 * 8 * 8, 1000)
-        self.fc2 = nn.Linear(1000, 100)
-        self.fc3 = nn.Linear(100, num_classes)
+        shared_in_ch = 100 + 100
+        
+        self.shared = nn.Sequential(
+            nn.Conv2d(shared_in_ch, 200, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(200, 200, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(200 * 8 * 8, 100),
+            nn.ReLU(inplace=True),
+            nn.Linear(100, num_classes)
+        )
 
     def forward(self, x_rgb, x_xyz):
-        x_rgb = self.pool(Fun.relu(self.rgb_conv1(x_rgb)))
-        x_rgb = self.pool(Fun.relu(self.rgb_conv2(x_rgb)))
-        x_rgb = self.pool(Fun.relu(self.rgb_conv3(x_rgb)))
-        
-        x_xyz = self.pool(Fun.relu(self.xyz_conv1(x_xyz)))
-        x_xyz = self.pool(Fun.relu(self.xyz_conv2(x_xyz)))
-        x_xyz = self.pool(Fun.relu(self.xyz_conv3(x_xyz)))
-        
-        x = torch.cat((x_rgb, x_xyz), 1)
-        x = torch.flatten(x, 1) # flatten all dimensions except batch
-        x = Fun.relu(self.fc1(x))
-        x = Fun.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        rgb_feat = self.rgb_path(x_rgb)
+        lidar_feat = self.lidar_path(x_xyz)
+
+        x = torch.cat([rgb_feat, lidar_feat], dim=1)
+
+        x = self.shared(x)
+        logits = self.classifier(x)
+        return logits
     
     def get_embedding_size(self) -> int:
         return self.num_classes
@@ -187,34 +204,54 @@ class AdditionIntermediateNet(BaseModel):
         kernel_size = 3
         super().__init__()
         self.num_classes = num_classes
-        self.rgb_conv1 = nn.Conv2d(rgb_ch, 25, kernel_size, padding=1)
-        self.rgb_conv2 = nn.Conv2d(25, 50, kernel_size, padding=1)
-        self.rgb_conv3 = nn.Conv2d(50, 100, kernel_size, padding=1)
         
-        self.xyz_conv1 = nn.Conv2d(xyz_ch, 25, kernel_size, padding=1)
-        self.xyz_conv2 = nn.Conv2d(25, 50, kernel_size, padding=1)
-        self.xyz_conv3 = nn.Conv2d(50, 100, kernel_size, padding=1)
+        self.rgb_path = nn.Sequential(
+            nn.Conv2d(rgb_ch, 50, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(50, 100, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
         
-        self.pool = nn.MaxPool2d(2)
-        self.fc1 = nn.Linear(100 * 8 * 8, 1000)
-        self.fc2 = nn.Linear(1000, 100)
-        self.fc3 = nn.Linear(100, num_classes)
+        self.lidar_path = nn.Sequential(
+            nn.Conv2d(xyz_ch, 50, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(50, 100, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        
+        shared_in_ch = 100
+        
+        self.shared = nn.Sequential(
+            nn.Conv2d(shared_in_ch, 200, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(200, 200, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(200 * 8 * 8, 100),
+            nn.ReLU(inplace=True),
+            nn.Linear(100, num_classes)
+        )
 
     def forward(self, x_rgb, x_xyz):
-        x_rgb = self.pool(Fun.relu(self.rgb_conv1(x_rgb)))
-        x_rgb = self.pool(Fun.relu(self.rgb_conv2(x_rgb)))
-        x_rgb = self.pool(Fun.relu(self.rgb_conv3(x_rgb)))
-        
-        x_xyz = self.pool(Fun.relu(self.xyz_conv1(x_xyz)))
-        x_xyz = self.pool(Fun.relu(self.xyz_conv2(x_xyz)))
-        x_xyz = self.pool(Fun.relu(self.xyz_conv3(x_xyz)))
-        
-        x = x_rgb + x_xyz # element-wise addition
-        x = torch.flatten(x, 1) # flatten all dimensions except batch
-        x = Fun.relu(self.fc1(x))
-        x = Fun.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        rgb_feat = self.rgb_path(x_rgb)
+        lidar_feat = self.lidar_path(x_xyz)
+
+        x = rgb_feat + lidar_feat
+
+        x = self.shared(x)
+        logits = self.classifier(x)
+        return logits
     
     def get_embedding_size(self) -> int:
         return self.num_classes
@@ -240,34 +277,54 @@ class HadamardIntermediateNet(BaseModel):
         kernel_size = 3
         super().__init__()
         self.num_classes = num_classes
-        self.rgb_conv1 = nn.Conv2d(rgb_ch, 25, kernel_size, padding=1)
-        self.rgb_conv2 = nn.Conv2d(25, 50, kernel_size, padding=1)
-        self.rgb_conv3 = nn.Conv2d(50, 100, kernel_size, padding=1)
         
-        self.xyz_conv1 = nn.Conv2d(xyz_ch, 25, kernel_size, padding=1)
-        self.xyz_conv2 = nn.Conv2d(25, 50, kernel_size, padding=1)
-        self.xyz_conv3 = nn.Conv2d(50, 100, kernel_size, padding=1)
+        self.rgb_path = nn.Sequential(
+            nn.Conv2d(rgb_ch, 50, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(50, 100, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
         
-        self.pool = nn.MaxPool2d(2)
-        self.fc1 = nn.Linear(100 * 8 * 8, 1000)
-        self.fc2 = nn.Linear(1000, 100)
-        self.fc3 = nn.Linear(100, num_classes)
+        self.lidar_path = nn.Sequential(
+            nn.Conv2d(xyz_ch, 50, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(50, 100, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        
+        shared_in_ch = 100
+        
+        self.shared = nn.Sequential(
+            nn.Conv2d(shared_in_ch, 200, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(200, 200, kernel_size, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(200 * 8 * 8, 100),
+            nn.ReLU(inplace=True),
+            nn.Linear(100, num_classes)
+        )
 
     def forward(self, x_rgb, x_xyz):
-        x_rgb = self.pool(Fun.relu(self.rgb_conv1(x_rgb)))
-        x_rgb = self.pool(Fun.relu(self.rgb_conv2(x_rgb)))
-        x_rgb = self.pool(Fun.relu(self.rgb_conv3(x_rgb)))
-        
-        x_xyz = self.pool(Fun.relu(self.xyz_conv1(x_xyz)))
-        x_xyz = self.pool(Fun.relu(self.xyz_conv2(x_xyz)))
-        x_xyz = self.pool(Fun.relu(self.xyz_conv3(x_xyz)))
+        rgb_feat = self.rgb_path(x_rgb)
+        lidar_feat = self.lidar_path(x_xyz)
 
-        x = x_rgb * x_xyz # element-wise multiplication
-        x = torch.flatten(x, 1) # flatten all dimensions except batch
-        x = Fun.relu(self.fc1(x))
-        x = Fun.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        x = rgb_feat * lidar_feat
+
+        x = self.shared(x)
+        logits = self.classifier(x)
+        return logits
     
     def get_embedding_size(self) -> int:
         return self.num_classes
@@ -275,12 +332,13 @@ class HadamardIntermediateNet(BaseModel):
     def get_fusion_strategy(self) -> str:
         return "intermediate"
 
+
 # Task 3
 class ConcatIntermediateNetWithStride(BaseModel):
     """
     ConcatIntermediateNetWithStride is a model that performs intermediate fusion by concatenating
     the feature maps from the RGB and XYZ branches.
-
+    
     Args:
         rgb_ch (int): Number of input channels for the RGB images
         xyz_ch (int): Number of input channels for the XYZ images
@@ -293,33 +351,49 @@ class ConcatIntermediateNetWithStride(BaseModel):
         kernel_size = 3
         super().__init__()
         self.num_classes = num_classes
-        self.rgb_conv1 = nn.Conv2d(rgb_ch, 25, kernel_size, stride=2, padding=1)
-        self.rgb_conv2 = nn.Conv2d(25, 50, kernel_size, stride=2, padding=1)
-        self.rgb_conv3 = nn.Conv2d(50, 100, kernel_size, stride=2, padding=1)
 
-        self.xyz_conv1 = nn.Conv2d(xyz_ch, 25, kernel_size, stride=2, padding=1)
-        self.xyz_conv2 = nn.Conv2d(25, 50, kernel_size, stride=2, padding=1)
-        self.xyz_conv3 = nn.Conv2d(50, 100, kernel_size, stride=2, padding=1)
+        self.rgb_path = nn.Sequential(
+            nn.Conv2d(rgb_ch, 50, 3, padding=1, stride=2),
+            nn.ReLU(inplace=True),
 
-        self.fc1 = nn.Linear(200 * 8 * 8, 1000)
-        self.fc2 = nn.Linear(1000, 100)
-        self.fc3 = nn.Linear(100, num_classes)
+            nn.Conv2d(50, 100, 3, padding=1, stride=2),
+            nn.ReLU(inplace=True),
+        )
+        
+        self.lidar_path = nn.Sequential(
+            nn.Conv2d(xyz_ch, 50, 3, padding=1, stride=2),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(50, 100, 3, padding=1, stride=2),
+            nn.ReLU(inplace=True),
+        )
+        
+        shared_in_ch = 100 + 100
+        
+        self.shared = nn.Sequential(
+            nn.Conv2d(shared_in_ch, 200, 3, padding=1, stride=2),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(200, 200, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(200 * 8 * 8, 100),
+            nn.ReLU(inplace=True),
+            nn.Linear(100, num_classes)
+        )
 
     def forward(self, x_rgb, x_xyz):
-        x_rgb = Fun.relu(self.rgb_conv1(x_rgb))
-        x_rgb = Fun.relu(self.rgb_conv2(x_rgb))
-        x_rgb = Fun.relu(self.rgb_conv3(x_rgb))
-        
-        x_xyz = Fun.relu(self.xyz_conv1(x_xyz))
-        x_xyz = Fun.relu(self.xyz_conv2(x_xyz))
-        x_xyz = Fun.relu(self.xyz_conv3(x_xyz))
-        
-        x = torch.cat((x_rgb, x_xyz), 1)
-        x = torch.flatten(x, 1) # flatten all dimensions except batch
-        x = Fun.relu(self.fc1(x))
-        x = Fun.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        rgb_feat = self.rgb_path(x_rgb)
+        lidar_feat = self.lidar_path(x_xyz)
+
+        x = torch.cat([rgb_feat, lidar_feat], dim=1)
+
+        x = self.shared(x)
+        logits = self.classifier(x)
+        return logits
     
     def get_embedding_size(self) -> int:
         return self.num_classes
@@ -472,8 +546,8 @@ class ContrastivePretraining(BaseModel):
 
     def get_fusion_strategy(self) -> str:
         return "contrastive"
-    
-    
+
+
 class Projector(BaseModel):
     """
     Projector is a model that projects image embeddings to LiDAR embedding space.
@@ -506,7 +580,7 @@ class Projector(BaseModel):
     def get_fusion_strategy(self) -> str:
         return "N/A"
 
-    
+
 class RGB2LiDARClassifier(BaseModel):
     """
     RGB2LiDARClassifier is a model that classifies projected RGB embeddings

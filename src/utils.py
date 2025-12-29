@@ -103,7 +103,8 @@ def infer_model(
         input_fn: Callable[[Any], Tuple[torch.Tensor, ...]],
     ) -> tuple[float, List[np.ndarray]]:
     """
-    Inference loop for a given model.
+    Inference loop for a given model. We assume binary classification with
+    one output neuron.
 
     Args:
         model (torch.nn.Module): The model to use for inference.
@@ -111,22 +112,26 @@ def infer_model(
         input_fn (Callable): A function that takes a batch and returns the model inputs.
 
     Returns:
-        tuple[float, List[np.ndarray]]: Accuracy and list of model outputs.
+        tuple[float, List[np.ndarray]]: Outputs and groud truths.
     """
     model.eval()
     outputs = []
-    correct_samples = 0
+    ground_truth = []
 
     with torch.no_grad():
         for batch in dataloader:
-            preds = model(*input_fn(batch))
-            correct_samples += torch.sum(torch.argmax(preds) == batch[2])
-            preds = preds.cpu().numpy()
-            outputs.extend(preds)
-            
-    acc = correct_samples / len(dataloader.dataset)
+            logits = model(*input_fn(batch))
+            probs = torch.sigmoid(logits).squeeze(1)
+            preds = (probs >= 0.5).long().cpu().numpy()
+            labels = batch[2].squeeze(1).long().cpu().numpy()
 
-    return acc, outputs
+            outputs.extend(preds)
+            ground_truth.extend(labels)
+
+    outputs = np.vstack(outputs)
+    ground_truth = np.vstack(ground_truth)
+
+    return outputs, ground_truth
 
 
 def get_rgb_input(batch):

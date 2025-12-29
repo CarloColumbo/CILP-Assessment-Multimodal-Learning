@@ -5,6 +5,7 @@ import torch.nn as nn
 from typing import Optional, Tuple, Any, List, Callable
 import wandb
 import time
+from tqdm import tqdm
 
 from src.models import BaseModel
 
@@ -21,6 +22,7 @@ def train_model(
         save_path: Optional[str],
         target_idx: int = -1,
         log_predictions: bool = True,
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None, 
     ) -> Tuple[List[float], List[float], float]:
     """
     Train loop for a given model with logging to wandb.
@@ -37,6 +39,7 @@ def train_model(
         save_path (str): The path to save the best model.
         target_idx (int): The index of the target variable in the batch.
         log_predictions (bool): Whether to log sample predictions to wandb.
+        scheduler (torch.optim.lr_scheduler._LRScheduler, optional): Learning rate scheduler.
         
         
     Returns:
@@ -62,7 +65,7 @@ def train_model(
     valid_losses = []
     best_valid_loss = float('inf')
 
-    for epoch in range(epochs):
+    for epoch in tqdm(range(epochs)):
         start_time = time.time()
         model.train()
         batch_losses = []
@@ -98,6 +101,10 @@ def train_model(
 
         valid_loss = np.mean(batch_losses)
         valid_losses.append(valid_loss)
+
+        # Step the scheduler if provided
+        if scheduler is not None:
+            scheduler.step()
         
         # Track time before logging because of network latency
         elapsed = time.time() - start_time
