@@ -11,5 +11,4 @@ wheels/
 
 data
 cilp_assessment
-checkpoints
 notebooks/wandb
