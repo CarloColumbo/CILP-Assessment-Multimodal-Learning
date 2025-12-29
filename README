@@ -1,10 +1,92 @@
-README.md explaining how to run your code
+# General
+**Project title**: CILP Assessment: Multimodal Learning
+
+**Description**: This project contains the submission for Lab 2 of the course *Applied Hands-On Computer Vision*. It uses material from the *NVIDIA DLI Multimodality* course. The goal is to train a classifier on a dataset containing RGB and LiDAR data of spheres and cubes. We test multiple fusion strategies and downsampling methods.
+```
+Project structure:
+├── notebooks/
+│   ├── 01_dataset_exploration.ipynb    # Task 2 - Dataset creation
+│   ├── 02_fusion_comparison.ipynb      # Task 3 - Comparision of fusion strategies
+│   ├── 03_strided_conv_ablation.ipynb  # Task 4 - Comparision of downsampling methods
+│   └── 04_final_assessment.ipynb       # Task 5 - Final classifier training
+│
+├── src/
+│   ├── __init__.py
+│   ├── models.py          # All model architectures
+│   ├── datasets.py        # Dataset classes
+│   ├── training.py        # Training loops
+│   ├── visualization.py   # Plotting utilities
+|   └── utils.py           # Functions for seeding, inference and helper
+│
+├── checkpoints/           # Saved model weights
+├── results/               # Figures and tables
+├── requirements.txt       # Dependencies
+└── README.md              # Setup and usage instructions
+```
 
 
-learning rate schedular
-requirements.txt with pinned versions
-Clear instructions for data setup*
-wandb screenshots
+# How to Run the Code
+This project contains four notebooks. The first notebook creates the dataset as a FiftyOne dataset. The data should be stored in the following structure:
+```
+data/assessment/
+├── cubes/
+│   ├── rgb/
+│   │   ├── 0000.png
+│   │   ├── 0001.png
+│   │   └── ...
+│   └── lidar/
+│       ├── 0000.npy
+│       ├── 0001.npy
+│       └── ...
+└── spheres/
+    ├── rgb/
+    └── lidar/lidar/
+```
+
+    
+Note: For spheres, the lidar folder is duplicated. This is due to a copy error that was not corrected because of high latency when working with Google Drive.
+
+The dataset creation notebook randomly selects 10% of samples for each modality independently. It also creates a train/test split. The dataset is saved both locally and on Hugging Face: CarloColumbo/cilp_assessment.
+
+All remaining notebooks can run independently after the first one. At the top of each notebook we mount Google Drive, install dependencies, and copy files to the working directory for faster access. The dependencies are listed in requirements.txt.
+
+The code is seeded before each training loop and during DataLoader creation. This makes the results reproducible. However, small differences may still occur due to different CUDA versions on Colab. Each notebook includes a summary of the machine used.
+
+ 
+# Weights & Biases
+We used Weights & Biases (wandb) to monitor training: https://wandb.ai/karl-schuetz-hasso-plattner-institut/cilp-extended-assessment?nw=nwuserkarlschuetz
 
 
-HuggingFace: CarloColumbo/cilp_assessment
+# Summary of results
+## Comparison of Fusion Strategies
+| Metrics                   | Intermediate Fusion (Concat) | Intermediate Fusion (Add) | Intermediate Fusion (Hadamard) | Late Fusion |
+| ------------------------- | ---------------------------- | ------------------------- | ------------------------------ | ----------- |
+| F1 score                  | 1.000000                     | 0.903226                  | 0.833333                       | 0.833333    |
+| Validation Loss           | 0.00171058                   | 0.030699                  | 0.0694984                      | 0.070162    |
+| Parameters (M)            | 2.0945                       | 1.9145                    | 1.9145                         | 3.0549      |
+| Training Time / epoch (s) | 1.27279                      | 1.19785                   | 1.20082                        | 1.29306     |
+| GPU Memory (MB)           | 7.99365                      | (incorrect, see below)    | 7.93359                        | 11.6592     |
+
+
+## Comparision of Downsampling Methods (tested on Intermediate Fusion Concatenation)
+| Metric          | MaxPool2d  | Stride-2 Conv2d | Difference |
+| --------------- | ---------- | --------------- | ---------- |
+| Validation Loss | 0.00171058 | 0.198788        | 0.197078   |
+| Parameters (M)  | 2.0945     | 2.0945          | 0          |
+| Training Time   | 63.3715    | 49.8364         | −13.535    |
+| Final Accuracy  | 1.000000   | 0.930168        | −0.069832  |
+
+
+## Classifier Results
+- Contrastive Pretraining Validation loss:  2.917559186617533
+- Projector Validation loss:  8.76205134166715e-05
+- RGB to Lidar Classifier Validation loss:  0.07910528592765331
+- RGB to Lidar Classifier Validation accuracy: 96.65%
+
+
+# Known Issues
+The GPU memory reported for Intermediate Fusion (Addition) is incorrect. It should match the value for Intermediate Fusion (Hadamard).
+
+
+# Acknowledgments
+We used GitHub Copilot for coding assistance and ChatGPT for refining the written text.
